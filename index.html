@@ -354,6 +354,20 @@
     const typingId = addTyping();
     setSendDisabled(true);
     try {
+      // If user asks about CV but hasn't uploaded one yet — intercept
+      const cvKeywords = ['analyze my cv', 'analyze my resume', 'read my cv', 'read my resume',
+                          'check my cv', 'check my resume', 'review my cv', 'review my resume',
+                          'my cv', 'my resume', 'uploaded cv', 'uploaded resume'];
+      const lowerText = text.toLowerCase();
+      const askingAboutCv = cvKeywords.some(kw => lowerText.includes(kw));
+
+      if (askingAboutCv && (!window.resumeText || window.resumeText.trim().length < 50)) {
+        removeTyping(typingId);
+        addMessage('bot', '📄 I don't have your CV yet. Please click the Resume tab at the top → upload your PDF → click Analyze My Resume. Then come back to chat and I will give you full personalized advice!');
+        setSendDisabled(false);
+        return;
+      }
+
       const result = await window.gradioClient.predict("/career_chat_text", [text, window.chatHistory, window.resumeText]);
       removeTyping(typingId);
       window.window.chatHistory = Array.isArray(result.data[0]) ? result.data[0] : [];
