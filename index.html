@@ -365,8 +365,15 @@
     setSendDisabled(true);
 
     try {
+      // Inject resume directly into prompt so the backend always receives it,
+      // regardless of whether it correctly reads the third parameter
+      const resumePrefix = window._state.resume.length > 50
+        ? `[CANDIDATE RESUME]\n${window._state.resume}\n[END RESUME]\n\nUsing the above resume, answer: `
+        : '';
+      const fullPrompt = resumePrefix + text;
+
       const result = await window._state.client.predict("/career_chat_text", [
-        text, window._state.history, window._state.resume
+        fullPrompt, window._state.history, window._state.resume
       ]);
       removeTyping(typingId);
       window._state.history = Array.isArray(result.data[0]) ? result.data[0] : [];
