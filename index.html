@@ -290,7 +290,23 @@
   // ── CV badge ──
   function showCvBadge() {
     const b = document.getElementById('cv-badge');
-    if (b) b.style.display = 'block';
+    if (b) {
+      b.style.display = 'block';
+      b.textContent = '✅ CV loaded — I will give you personalized advice based on your resume';
+      b.style.color = '#10b981';
+      b.style.borderColor = 'rgba(16,185,129,0.3)';
+      b.style.background = 'rgba(16,185,129,0.12)';
+    }
+  }
+  function showCvPending(fileName) {
+    const b = document.getElementById('cv-badge');
+    if (b) {
+      b.style.display = 'block';
+      b.textContent = '⏳ ' + fileName + ' selected — click "Analyze My Resume" to load it';
+      b.style.color = '#f59e0b';
+      b.style.borderColor = 'rgba(245,158,11,0.3)';
+      b.style.background = 'rgba(245,158,11,0.08)';
+    }
   }
 
   // ── Tab switching ──
@@ -440,6 +456,7 @@
     document.getElementById('file-name').textContent = '✅ ' + file.name;
     document.getElementById('analyze-btn').disabled = false;
     document.getElementById('upload-zone').style.borderColor = 'var(--green)';
+    showCvPending(file.name);
   };
 
   window.handleDrop = e => {
@@ -451,6 +468,7 @@
       window._state.pdfFile = file;
       document.getElementById('file-name').textContent = '✅ ' + file.name;
       document.getElementById('analyze-btn').disabled = false;
+      showCvPending(file.name);
     } else {
       alert('Please upload a PDF file only.');
     }
