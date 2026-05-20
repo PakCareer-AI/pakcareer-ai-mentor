@@ -138,6 +138,8 @@
 <main>
   <div class="panel active" id="chat-panel">
     <div class="messages" id="messages">
+      <!-- CV status badge -->
+      <div id="cv-badge" style="display:none;background:rgba(16,185,129,0.12);border:1px solid rgba(16,185,129,0.3);border-radius:8px;padding:6px 14px;margin:8px 24px 0;font-size:12px;color:#10b981;flex-shrink:0;">✅ CV loaded — I will give you personalized advice based on your resume</div>
       <div class="welcome" id="welcome-screen">
         <div class="welcome-icon">🎓</div>
         <h2>Your Career Mentor</h2>
@@ -231,18 +233,29 @@
   window.pdfjsLib.GlobalWorkerOptions.workerSrc =
     'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
-  let gradioClient   = null;
-  let chatHistory    = [];
-  let resumeText     = "";
-  let identifiedRole = "";
-  let pdfFile        = null;
+  // Use window scope so variables persist across all functions
+  window.gradioClient   = null;
+  window.chatHistory    = [];
+  window.resumeText     = "";
+  window.identifiedRole = "";
+  window.pdfFile        = null;
   let mediaRecorder  = null;
   let audioChunks    = [];
   let isRecording    = false;
+  // Shortcuts
+  const getClient   = () => window.gradioClient;
+  const getHistory  = () => window.chatHistory;
+  const getResume   = () => window.resumeText;
+
+  // Show/hide CV loaded badge in chat tab
+  function updateCvBadge(loaded) {
+    const badge = document.getElementById('cv-badge');
+    if (badge) badge.style.display = loaded ? 'block' : 'none';
+  }
 
   async function connectClient() {
     try {
-      gradioClient = await Client.connect(SPACE);
+      window.gradioClient = await Client.connect(SPACE);
       console.log("✅ Connected");
     } catch(e) {
       console.error("Retrying...", e);
@@ -269,7 +282,7 @@
   async function analyzeResumeText(pdfText) {
     const prompt = `Analyze this CV for the Pakistani job market. Structure your response with exactly these labels:\nSUMMARY: (2-3 sentence professional summary)\nCOMPANIES: (comma separated list of companies)\nROLE: (most suitable job role)`;
 
-    const result = await gradioClient.predict("/career_chat_text", [
+    const result = await window.gradioClient.predict("/career_chat_text", [
       prompt,
       [],
       pdfText.substring(0, 4000)
@@ -334,17 +347,17 @@
     const input = document.getElementById('user-input');
     const text  = input.value.trim();
     if (!text) return;
-    if (!gradioClient) { alert('Still connecting... please wait.'); return; }
+    if (!window.window.gradioClient) { alert('Still connecting... please wait.'); return; }
     hideWelcome();
     addMessage('user', text);
     input.value = ''; input.style.height = 'auto';
     const typingId = addTyping();
     setSendDisabled(true);
     try {
-      const result = await gradioClient.predict("/career_chat_text", [text, chatHistory, resumeText]);
+      const result = await window.gradioClient.predict("/career_chat_text", [text, window.chatHistory, window.resumeText]);
       removeTyping(typingId);
-      chatHistory = Array.isArray(result.data[0]) ? result.data[0] : [];
-      addMessage('bot', getLastBotReply(chatHistory));
+      window.window.chatHistory = Array.isArray(result.data[0]) ? result.data[0] : [];
+      addMessage('bot', getLastBotReply(window.chatHistory));
     } catch(err) {
       removeTyping(typingId);
       addMessage('bot', "⚠️ Error: " + err.message);
@@ -382,19 +395,19 @@
     }
   }
   async function sendVoiceMessage() {
-    if (!gradioClient) { addMessage('bot','⚠️ Not connected yet.'); return; }
+    if (!window.gradioClient) { addMessage('bot','⚠️ Not connected yet.'); return; }
     const blob = new Blob(audioChunks, { type: 'audio/webm' });
     const typingId = addTyping();
     hideWelcome();
     try {
-      const result = await gradioClient.predict("/career_chat_voice", [blob, chatHistory, resumeText]);
+      const result = await window.gradioClient.predict("/career_chat_voice", [blob, window.chatHistory, window.resumeText]);
       removeTyping(typingId);
       const newHistory  = result.data[0];
       const audioData   = result.data[1];
       const transcribed = extractText(result.data[2]) || "";
-      chatHistory = Array.isArray(newHistory) ? newHistory : [];
+      window.window.chatHistory = Array.isArray(newHistory) ? newHistory : [];
       if (transcribed && !transcribed.startsWith('⚠️')) addMessage('user', '🎙️ ' + transcribed);
-      addMessage('bot', getLastBotReply(chatHistory), audioData);
+      addMessage('bot', getLastBotReply(window.chatHistory), audioData);
     } catch(err) {
       removeTyping(typingId);
       addMessage('bot', '⚠️ Voice failed: ' + err.message);
@@ -420,7 +433,7 @@
     const file = e.dataTransfer.files[0];
     const isPdf = file && (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf'));
     if (isPdf) {
-      pdfFile = file;
+      window.pdfFile = file;
       document.getElementById('file-name').textContent = '✅ ' + file.name;
       document.getElementById('analyze-btn').disabled = false;
     } else {
@@ -429,7 +442,7 @@
   };
 
   window.analyzeResume = async () => {
-    if (!pdfFile || !gradioClient) return;
+    if (!window.pdfFile || !window.gradioClient) return;
     document.getElementById('resume-loader').classList.add('show');
     document.getElementById('resume-loader-text').textContent = 'Reading your PDF...';
     document.getElementById('analyze-btn').disabled = true;
@@ -437,7 +450,7 @@
 
     try {
       // Step 1: Extract text from PDF in browser
-      const pdfText = await extractPdfText(pdfFile);
+      const pdfText = await extractPdfText(window.pdfFile);
       console.log("PDF text extracted, length:", pdfText.length);
 
       if (!pdfText || pdfText.length < 50) {
@@ -445,7 +458,9 @@
       }
 
       // Step 2: Save full resume text — this is used in ALL future chat messages
-      resumeText = pdfText.substring(0, 4000);
+      window.resumeText = pdfText.substring(0, 4000);
+      console.log('CV saved to window.resumeText, length:', window.resumeText.length);
+      updateCvBadge(true);
 
       document.getElementById('resume-loader-text').textContent = 'Analyzing your CV...';
 
@@ -461,7 +476,7 @@
 
       const summary   = summaryMatch   ? summaryMatch[1].trim()   : aiResponse;
       const companies = companiesMatch ? companiesMatch[1].trim() : 'See summary above';
-      identifiedRole  = roleMatch      ? roleMatch[1].trim()      : 'Professional';
+      window.identifiedRole  = roleMatch      ? roleMatch[1].trim()      : 'Professional';
 
       // Step 5: Display results
       document.getElementById('result-summary').textContent   = summary;
@@ -493,12 +508,12 @@
   }
 
   window.findJobs = async () => {
-    if (!gradioClient) return;
+    if (!window.gradioClient) return;
     document.getElementById('jobs-loader').classList.add('show');
     document.getElementById('jobs-btn').disabled = true;
     document.getElementById('jobs-list').innerHTML = '';
     try {
-      const result  = await gradioClient.predict("/find_jobs", [identifiedRole || "Software Engineer"]);
+      const result  = await window.window.gradioClient.predict("/find_jobs", [window.identifiedRole || "Software Engineer"]);
       const jobText = extractText(result.data[0]) || "No results found.";
 
       // Split into individual job blocks (separated by blank lines or numbered)
