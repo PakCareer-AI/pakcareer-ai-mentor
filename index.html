@@ -223,6 +223,8 @@
 <!-- PDF.js — reads PDF in browser, no upload needed -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+
 <script type="module">
   import { Client } from "https://cdn.jsdelivr.net/npm/@gradio/client/dist/index.min.js";
 
@@ -233,63 +235,30 @@
   window.pdfjsLib.GlobalWorkerOptions.workerSrc =
     'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
-  // Use window scope so variables persist across all functions
-  window.gradioClient   = null;
-  window.chatHistory    = [];
-  window.resumeText     = "";
-  window.identifiedRole = "";
-  window.pdfFile        = null;
-  let mediaRecorder  = null;
-  let audioChunks    = [];
-  let isRecording    = false;
-  // Shortcuts
-  const getClient   = () => window.gradioClient;
-  const getHistory  = () => window.chatHistory;
-  const getResume   = () => window.resumeText;
+  // ── State — all on window so they persist across all functions ──
+  window._state = {
+    client:   null,
+    history:  [],
+    resume:   "",
+    role:     "",
+    pdfFile:  null
+  };
 
-  // Show/hide CV loaded badge in chat tab
-  function updateCvBadge(loaded) {
-    const badge = document.getElementById('cv-badge');
-    if (badge) badge.style.display = loaded ? 'block' : 'none';
-  }
+  let mediaRecorder = null;
+  let audioChunks   = [];
+  let isRecording   = false;
 
+  // Connect on load
   async function connectClient() {
     try {
-      window.gradioClient = await Client.connect(SPACE);
-      console.log("✅ Connected");
+      window._state.client = await Client.connect(SPACE);
+      console.log("✅ Connected to Space");
     } catch(e) {
       console.error("Retrying...", e);
       setTimeout(connectClient, 3000);
     }
   }
   connectClient();
-
-  // ── Extract PDF text in the browser using PDF.js ──
-  async function extractPdfText(file) {
-    const arrayBuffer = await file.arrayBuffer();
-    const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-    let fullText = '';
-    for (let i = 1; i <= pdf.numPages; i++) {
-      const page    = await pdf.getPage(i);
-      const content = await page.getTextContent();
-      const pageText = content.items.map(item => item.str).join(' ');
-      fullText += pageText + '\n';
-    }
-    return fullText.trim();
-  }
-
-  // ── Analyze resume text ──
-  async function analyzeResumeText(pdfText) {
-    const prompt = `Analyze this CV for the Pakistani job market. Structure your response with exactly these labels:\nSUMMARY: (2-3 sentence professional summary)\nCOMPANIES: (comma separated list of companies)\nROLE: (most suitable job role)`;
-
-    const result = await window.gradioClient.predict("/career_chat_text", [
-      prompt,
-      [],
-      pdfText.substring(0, 4000)
-    ]);
-
-    return result;
-  }
 
   // ── Extract plain text from ANY Gradio response format ──
   function extractText(value) {
@@ -318,24 +287,34 @@
     return "Sorry, no response received.";
   }
 
-  // ── Global helpers ──
+  // ── CV badge ──
+  function showCvBadge() {
+    const b = document.getElementById('cv-badge');
+    if (b) b.style.display = 'block';
+  }
+
+  // ── Tab switching ──
   window.switchTab = (tab, btn) => {
     document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
     document.getElementById(tab+'-panel').classList.add('active');
     btn.classList.add('active');
   };
+
   window.autoResize = el => {
     el.style.height = 'auto';
     el.style.height = Math.min(el.scrollHeight, 120)+'px';
   };
+
   window.handleKey = e => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); window.sendMessage(); }
   };
+
   window.sendSuggestion = btn => {
     document.getElementById('user-input').value = btn.textContent;
     window.sendMessage();
   };
+
   window.stopSpeaking = () => {
     const audio = document.getElementById('reply-audio');
     audio.pause(); audio.currentTime = 0; audio.src = '';
@@ -347,31 +326,35 @@
     const input = document.getElementById('user-input');
     const text  = input.value.trim();
     if (!text) return;
-    if (!window.window.gradioClient) { alert('Still connecting... please wait.'); return; }
+    if (!window._state.client) { alert('Still connecting... please wait a moment.'); return; }
+
+    // If asking about CV but not uploaded yet
+    const cvWords = ['analyze my cv','review my cv','check my cv','read my cv',
+                     'analyze my resume','review my resume','my cv','my resume'];
+    const lower = text.toLowerCase();
+    const askingCv = cvWords.some(w => lower.includes(w));
+    if (askingCv && window._state.resume.length < 50) {
+      hideWelcome();
+      addMessage('user', text);
+      input.value = ''; input.style.height = 'auto';
+      addMessage('bot', '📄 I don\'t have your CV yet. Please click the Resume tab at the top → upload your PDF → click Analyze My Resume. Then come back here and I will give you full personalized advice!');
+      return;
+    }
+
     hideWelcome();
     addMessage('user', text);
     input.value = ''; input.style.height = 'auto';
+
     const typingId = addTyping();
     setSendDisabled(true);
+
     try {
-      // If user asks about CV but hasn't uploaded one yet — intercept
-      const cvKeywords = ['analyze my cv', 'analyze my resume', 'read my cv', 'read my resume',
-                          'check my cv', 'check my resume', 'review my cv', 'review my resume',
-                          'my cv', 'my resume', 'uploaded cv', 'uploaded resume'];
-      const lowerText = text.toLowerCase();
-      const askingAboutCv = cvKeywords.some(kw => lowerText.includes(kw));
-
-      if (askingAboutCv && (!window.resumeText || window.resumeText.trim().length < 50)) {
-        removeTyping(typingId);
-        addMessage('bot', '📄 I don't have your CV yet. Please click the Resume tab at the top → upload your PDF → click Analyze My Resume. Then come back to chat and I will give you full personalized advice!');
-        setSendDisabled(false);
-        return;
-      }
-
-      const result = await window.gradioClient.predict("/career_chat_text", [text, window.chatHistory, window.resumeText]);
+      const result = await window._state.client.predict("/career_chat_text", [
+        text, window._state.history, window._state.resume
+      ]);
       removeTyping(typingId);
-      window.window.chatHistory = Array.isArray(result.data[0]) ? result.data[0] : [];
-      addMessage('bot', getLastBotReply(window.chatHistory));
+      window._state.history = Array.isArray(result.data[0]) ? result.data[0] : [];
+      addMessage('bot', getLastBotReply(window._state.history));
     } catch(err) {
       removeTyping(typingId);
       addMessage('bot', "⚠️ Error: " + err.message);
@@ -384,6 +367,7 @@
   window.toggleRecording = async () => {
     if (!isRecording) { await startRecording(); } else { stopRecording(); }
   };
+
   async function startRecording() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -399,6 +383,7 @@
       alert('Microphone access denied. Please allow microphone in browser settings.');
     }
   }
+
   function stopRecording() {
     if (mediaRecorder && isRecording) {
       mediaRecorder.stop();
@@ -408,20 +393,23 @@
       document.getElementById('voice-status').classList.remove('show');
     }
   }
+
   async function sendVoiceMessage() {
-    if (!window.gradioClient) { addMessage('bot','⚠️ Not connected yet.'); return; }
+    if (!window._state.client) { addMessage('bot','⚠️ Not connected yet.'); return; }
     const blob = new Blob(audioChunks, { type: 'audio/webm' });
     const typingId = addTyping();
     hideWelcome();
     try {
-      const result = await window.gradioClient.predict("/career_chat_voice", [blob, window.chatHistory, window.resumeText]);
+      const result = await window._state.client.predict("/career_chat_voice", [
+        blob, window._state.history, window._state.resume
+      ]);
       removeTyping(typingId);
       const newHistory  = result.data[0];
       const audioData   = result.data[1];
       const transcribed = extractText(result.data[2]) || "";
-      window.window.chatHistory = Array.isArray(newHistory) ? newHistory : [];
+      window._state.history = Array.isArray(newHistory) ? newHistory : [];
       if (transcribed && !transcribed.startsWith('⚠️')) addMessage('user', '🎙️ ' + transcribed);
-      addMessage('bot', getLastBotReply(window.chatHistory), audioData);
+      addMessage('bot', getLastBotReply(window._state.history), audioData);
     } catch(err) {
       removeTyping(typingId);
       addMessage('bot', '⚠️ Voice failed: ' + err.message);
@@ -429,13 +417,26 @@
     }
   }
 
-  // ── RESUME — read PDF in browser, send text to API ──
+  // ── PDF reading ──
+  async function extractPdfText(file) {
+    const arrayBuffer = await file.arrayBuffer();
+    const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    let fullText = '';
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page    = await pdf.getPage(i);
+      const content = await page.getTextContent();
+      fullText += content.items.map(item => item.str).join(' ') + '\n';
+    }
+    return fullText.trim();
+  }
+
+  // ── RESUME ──
   window.handleFile = e => {
     const file = e.target.files[0];
     if (!file) return;
     const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
     if (!isPdf) { alert('Please upload a PDF file only.'); e.target.value = ''; return; }
-    pdfFile = file;
+    window._state.pdfFile = file;
     document.getElementById('file-name').textContent = '✅ ' + file.name;
     document.getElementById('analyze-btn').disabled = false;
     document.getElementById('upload-zone').style.borderColor = 'var(--green)';
@@ -447,7 +448,7 @@
     const file = e.dataTransfer.files[0];
     const isPdf = file && (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf'));
     if (isPdf) {
-      window.pdfFile = file;
+      window._state.pdfFile = file;
       document.getElementById('file-name').textContent = '✅ ' + file.name;
       document.getElementById('analyze-btn').disabled = false;
     } else {
@@ -456,53 +457,61 @@
   };
 
   window.analyzeResume = async () => {
-    if (!window.pdfFile || !window.gradioClient) return;
+    if (!window._state.pdfFile || !window._state.client) return;
     document.getElementById('resume-loader').classList.add('show');
     document.getElementById('resume-loader-text').textContent = 'Reading your PDF...';
     document.getElementById('analyze-btn').disabled = true;
     document.getElementById('resume-result').classList.remove('show');
 
     try {
-      // Step 1: Extract text from PDF in browser
-      const pdfText = await extractPdfText(window.pdfFile);
-      console.log("PDF text extracted, length:", pdfText.length);
+      // Extract PDF text in browser
+      const pdfText = await extractPdfText(window._state.pdfFile);
+      console.log("PDF text length:", pdfText.length);
 
       if (!pdfText || pdfText.length < 50) {
-        throw new Error('Could not read text from PDF. It may be a scanned image. Please use a text-based PDF.');
+        throw new Error('Could not read text from PDF. Please use a text-based PDF, not a scanned image.');
       }
 
-      // Step 2: Save full resume text — this is used in ALL future chat messages
-      window.resumeText = pdfText.substring(0, 4000);
-      console.log('CV saved to window.resumeText, length:', window.resumeText.length);
-      updateCvBadge(true);
+      // Save resume context
+      window._state.resume = pdfText.substring(0, 4000);
+      console.log("Resume saved, length:", window._state.resume.length);
 
       document.getElementById('resume-loader-text').textContent = 'Analyzing your CV...';
 
-      // Step 3: Get structured analysis
-      const result = await analyzeResumeText(pdfText);
+      // Analyze
+      const prompt = `Analyze this CV for the Pakistani job market. Give your response with exactly these labels:
+SUMMARY: (2-3 sentence professional summary)
+COMPANIES: (comma separated list of companies)
+ROLE: (most suitable job role)
+
+CV Content: ${window._state.resume}`;
+
+      const result = await window._state.client.predict("/career_chat_text", [
+        prompt, [], window._state.resume
+      ]);
+
       const newHistory = Array.isArray(result.data[0]) ? result.data[0] : [];
       const aiResponse = getLastBotReply(newHistory);
 
-      // Step 4: Parse structured sections from response
+      // Parse sections
       const summaryMatch   = aiResponse.match(/SUMMARY[:\s]+([\s\S]*?)(?=COMPANIES:|ROLE:|$)/i);
       const companiesMatch = aiResponse.match(/COMPANIES[:\s]+([\s\S]*?)(?=ROLE:|SUMMARY:|$)/i);
       const roleMatch      = aiResponse.match(/ROLE[:\s]+([^\n]+)/i);
 
-      const summary   = summaryMatch   ? summaryMatch[1].trim()   : aiResponse;
-      const companies = companiesMatch ? companiesMatch[1].trim() : 'See summary above';
-      window.identifiedRole  = roleMatch      ? roleMatch[1].trim()      : 'Professional';
+      window._state.role = roleMatch ? roleMatch[1].trim() : 'Professional';
 
-      // Step 5: Display results
-      document.getElementById('result-summary').textContent   = summary;
-      document.getElementById('result-companies').textContent = companies;
-      document.getElementById('result-role').textContent      = '🎯 ' + identifiedRole;
+      document.getElementById('result-summary').textContent   = summaryMatch   ? summaryMatch[1].trim()   : aiResponse;
+      document.getElementById('result-companies').textContent = companiesMatch ? companiesMatch[1].trim() : '';
+      document.getElementById('result-role').textContent      = '🎯 ' + window._state.role;
       document.getElementById('resume-result').classList.add('show');
 
-      console.log("Resume context saved for chat. Role:", identifiedRole);
+      // Show badge in chat tab
+      showCvBadge();
+      console.log("✅ Resume ready. Role:", window._state.role);
 
     } catch(err) {
-      console.error("Resume error:", err);
       alert('Resume analysis failed: ' + err.message);
+      console.error(err);
     }
 
     document.getElementById('resume-loader').classList.remove('show');
@@ -510,45 +519,38 @@
   };
 
   // ── JOBS ──
-  // Convert plain text URLs into clickable links
   function linkify(text) {
-    // Match http/https URLs and www. links
     const urlRegex = /(https?:\/\/[^\s,\)\]]+|www\.[^\s,\)\]]+)/gi;
     return text.replace(urlRegex, url => {
       const href = url.startsWith('http') ? url : 'https://' + url;
-      return `<a href="${href}" target="_blank" rel="noopener noreferrer"
-        style="color:var(--green);text-decoration:underline;word-break:break-all;">${url}</a>`;
+      return `<a href="${href}" target="_blank" rel="noopener noreferrer" style="color:var(--green);text-decoration:underline;word-break:break-all;">${url}</a>`;
     });
   }
 
   window.findJobs = async () => {
-    if (!window.gradioClient) return;
+    if (!window._state.client) return;
     document.getElementById('jobs-loader').classList.add('show');
     document.getElementById('jobs-btn').disabled = true;
     document.getElementById('jobs-list').innerHTML = '';
     try {
-      const result  = await window.window.gradioClient.predict("/find_jobs", [window.identifiedRole || "Software Engineer"]);
+      const role = window._state.role || 'Software Engineer';
+      const result = await window._state.client.predict("/find_jobs", [role]);
       const jobText = extractText(result.data[0]) || "No results found.";
-
-      // Split into individual job blocks (separated by blank lines or numbered)
       const blocks = jobText.split(/\n(?=\d+\.|Job \d+)/i).filter(b => b.trim());
-
+      const list = document.getElementById('jobs-list');
       if (blocks.length > 1) {
-        // Render each job as a separate card
         blocks.forEach(block => {
           const card = document.createElement('div');
           card.className = 'job-card';
           card.innerHTML = '<pre>' + linkify(block.trim()) + '</pre>';
-          document.getElementById('jobs-list').appendChild(card);
+          list.appendChild(card);
         });
       } else {
-        // Single block — render as one card with links
         const card = document.createElement('div');
         card.className = 'job-card';
         card.innerHTML = '<pre>' + linkify(jobText) + '</pre>';
-        document.getElementById('jobs-list').appendChild(card);
+        list.appendChild(card);
       }
-
     } catch(err) {
       document.getElementById('jobs-list').innerHTML = '<p style="color:var(--text-dim)">⚠️ ' + err.message + '</p>';
     }
@@ -561,6 +563,7 @@
     const w = document.getElementById('welcome-screen');
     if (w) w.style.display = 'none';
   }
+
   function addMessage(role, text, audioData = null) {
     const messages = document.getElementById('messages');
     const row      = document.createElement('div');
@@ -571,6 +574,7 @@
     const bubble   = document.createElement('div');
     bubble.className = 'bubble ' + role;
     bubble.textContent = extractText(text);
+
     if (role === 'bot' && audioData) {
       try {
         let audioUrl = '';
@@ -579,7 +583,7 @@
         else if (audioData && audioData.path) audioUrl = HF_BASE + '/file=' + audioData.path;
         if (audioUrl) {
           const audio = document.getElementById('reply-audio');
-          audio.src   = audioUrl;
+          audio.src = audioUrl;
           audio.play().then(() => {
             document.getElementById('stop-bar').classList.add('show');
           }).catch(() => {});
@@ -587,11 +591,13 @@
         }
       } catch(e) { console.log('Audio error:', e); }
     }
+
     row.appendChild(avatar);
     row.appendChild(bubble);
     messages.appendChild(row);
     messages.scrollTop = messages.scrollHeight;
   }
+
   let typingCounter = 0;
   function addTyping() {
     const id = 'typing-' + (++typingCounter);
