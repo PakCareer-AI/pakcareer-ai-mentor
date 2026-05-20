@@ -265,23 +265,14 @@
     return fullText.trim();
   }
 
-  // ── Analyze resume text using Groq via career_chat_text ──
-  // Instead of uploading PDF, we send the extracted text directly as a chat message
+  // ── Analyze resume text ──
   async function analyzeResumeText(pdfText) {
-    const prompt = `Please analyze this CV/Resume for the Pakistani job market and provide:
-1. A 2-3 sentence professional summary
-2. List of companies the person worked at
-3. The most suitable job role for this person
-
-CV Content:
-${pdfText.substring(0, 4000)}
-
-Please structure your response clearly with these three sections.`;
+    const prompt = `Analyze this CV for the Pakistani job market. Structure your response with exactly these labels:\nSUMMARY: (2-3 sentence professional summary)\nCOMPANIES: (comma separated list of companies)\nROLE: (most suitable job role)`;
 
     const result = await gradioClient.predict("/career_chat_text", [
       prompt,
       [],
-      pdfText  // pass as resume context too
+      pdfText.substring(0, 4000)
     ]);
 
     return result;
@@ -445,7 +436,7 @@ Please structure your response clearly with these three sections.`;
     document.getElementById('resume-result').classList.remove('show');
 
     try {
-      // Step 1: Extract text from PDF in browser — no upload needed!
+      // Step 1: Extract text from PDF in browser
       const pdfText = await extractPdfText(pdfFile);
       console.log("PDF text extracted, length:", pdfText.length);
 
@@ -453,25 +444,32 @@ Please structure your response clearly with these three sections.`;
         throw new Error('Could not read text from PDF. It may be a scanned image. Please use a text-based PDF.');
       }
 
-      // Save resume context for chat
-      resumeText = pdfText;
+      // Step 2: Save full resume text — this is used in ALL future chat messages
+      resumeText = pdfText.substring(0, 4000);
 
-      // Step 2: Send text to AI for analysis
       document.getElementById('resume-loader-text').textContent = 'Analyzing your CV...';
 
+      // Step 3: Get structured analysis
       const result = await analyzeResumeText(pdfText);
       const newHistory = Array.isArray(result.data[0]) ? result.data[0] : [];
       const aiResponse = getLastBotReply(newHistory);
 
-      // Try to extract role from response
-      const roleMatch = aiResponse.match(/(?:role|position|title)[:\s]+([^\n.]+)/i);
-      identifiedRole  = roleMatch ? roleMatch[1].trim() : "Professional";
+      // Step 4: Parse structured sections from response
+      const summaryMatch   = aiResponse.match(/SUMMARY[:\s]+([\s\S]*?)(?=COMPANIES:|ROLE:|$)/i);
+      const companiesMatch = aiResponse.match(/COMPANIES[:\s]+([\s\S]*?)(?=ROLE:|SUMMARY:|$)/i);
+      const roleMatch      = aiResponse.match(/ROLE[:\s]+([^\n]+)/i);
 
-      // Display results
-      document.getElementById('result-summary').textContent   = aiResponse;
-      document.getElementById('result-companies').textContent = 'Based on your uploaded CV';
+      const summary   = summaryMatch   ? summaryMatch[1].trim()   : aiResponse;
+      const companies = companiesMatch ? companiesMatch[1].trim() : 'See summary above';
+      identifiedRole  = roleMatch      ? roleMatch[1].trim()      : 'Professional';
+
+      // Step 5: Display results
+      document.getElementById('result-summary').textContent   = summary;
+      document.getElementById('result-companies').textContent = companies;
       document.getElementById('result-role').textContent      = '🎯 ' + identifiedRole;
       document.getElementById('resume-result').classList.add('show');
+
+      console.log("Resume context saved for chat. Role:", identifiedRole);
 
     } catch(err) {
       console.error("Resume error:", err);
